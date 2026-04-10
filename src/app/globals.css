@@ -1,32 +1,84 @@
+/* NOTE: leaflet/dist/leaflet.css is imported in MapSelector.tsx (via webpack),
+   NOT here — PostCSS cannot resolve bare node_modules @import paths. */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ── CSS variables ──────────────────────────────────────────────────────── */
 :root {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+  --font-system: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SF Mono', Menlo, Monaco, 'Courier New', monospace;
+  --color-accent: #0a84ff;
+  --color-green: #30d158;
+  --color-red: #ff453a;
+  --color-bg: #000000;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ── Base reset ─────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-system);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: #fff;
 }
 
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
+/* ── Leaflet overrides ──────────────────────────────────────────────────── */
+
+/* Dark background while tiles load */
+.leaflet-container {
+  background: #1a1f2e !important;
+  font-family: var(--font-system) !important;
 }
 
+/* Slightly boost satellite imagery contrast */
+.leaflet-tile-pane {
+  filter: brightness(0.96) saturate(1.08) contrast(1.04);
+}
+
+/* Hide the default Leaflet attribution (we respect ESRI TOS separately) */
+.leaflet-control-attribution {
+  display: none !important;
+}
+
+/* Smooth tile fade-in */
+.leaflet-tile {
+  transition: opacity 0.25s ease;
+}
+
+/* ── Three.js canvas ────────────────────────────────────────────────────── */
 canvas {
   display: block;
   outline: none;
+}
+
+/* ── Scrollbar styling (panel) ──────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
 }

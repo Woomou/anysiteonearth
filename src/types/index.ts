@@ -3,16 +3,18 @@ export interface Coordinates {
   lng: number;
 }
 
+export interface Region {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+}
+
 export interface SatelliteImageData {
   url: string;
   date: string;
   cloudCoverage: number;
-  bounds: {
-    north: number;
-    south: number;
-    east: number;
-    west: number;
-  };
+  bounds: Region;
 }
 
 export interface Scene3DData {
