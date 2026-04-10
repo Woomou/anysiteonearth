@@ -4,6 +4,7 @@ import './globals.css'
 export const metadata: Metadata = {
   title: 'Any Site on Earth',
   description: 'Interactive 3D Earth with satellite imagery and 3D scene generation',
+  icons: { icon: '/favicon.svg' },
 }
 
 export default function RootLayout({

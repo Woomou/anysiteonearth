@@ -1,182 +1,178 @@
 import { Coordinates, SatelliteImageData, Scene3DData } from '@/types';
 
-export class SceneGenerator {
-  // Generate height map from satellite image
-  async generateHeightMapFromImage(imageUrl: string, width: number = 256, height: number = 256): Promise<number[][]> {
-    return new Promise((resolve) => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d')!;
-      const img = new Image();
-      
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        canvas.width = width;
-        canvas.height = height;
-        ctx.drawImage(img, 0, 0, width, height);
-        
-        const imageData = ctx.getImageData(0, 0, width, height);
-        const data = imageData.data;
-        const heightMap: number[][] = [];
-        
-        for (let y = 0; y < height; y++) {
-          heightMap[y] = [];
-          for (let x = 0; x < width; x++) {
-            const i = (y * width + x) * 4;
-            // Use green channel for vegetation/height estimation
-            // Convert RGB to grayscale and normalize to height
-            const r = data[i];
-            const g = data[i + 1];
-            const b = data[i + 2];
-            
-            // Enhanced height calculation based on terrain characteristics
-            let heightValue = 0;
-            
-            // Vegetation detection (high green values)
-            if (g > r && g > b && g > 100) {
-              heightValue = 0.3 + (g / 255) * 0.7; // Trees/vegetation
-            }
-            // Water detection (high blue, low others)
-            else if (b > r && b > g && b > 120) {
-              heightValue = -0.2; // Water level
-            }
-            // Urban/rock detection (balanced RGB or high overall)
-            else if (Math.abs(r - g) < 30 && Math.abs(g - b) < 30 && (r + g + b) / 3 > 150) {
-              heightValue = 0.1 + ((r + g + b) / 765) * 0.4; // Urban/rocky areas
-            }
-            // Desert/sand (high red/yellow)
-            else if (r > 150 && g > 120 && b < 100) {
-              heightValue = 0.05 + Math.random() * 0.1; // Sandy areas with slight variation
-            }
-            // General terrain
-            else {
-              const grayscale = (r + g + b) / 3;
-              heightValue = (grayscale / 255) * 0.5;
-            }
-            
-            // Add some noise for realism
-            heightValue += (Math.random() - 0.5) * 0.05;
-            heightMap[y][x] = Math.max(-0.5, Math.min(1.0, heightValue));
-          }
-        }
-        
-        resolve(heightMap);
-      };
-      
-      img.onerror = () => {
-        // Fallback: generate procedural heightmap
-        resolve(this.generateProceduralHeightMap(width, height));
-      };
-      
-      img.src = imageUrl;
-    });
-  }
+// ─── Terrain tile helpers (AWS Terrain Tiles, terrarium format) ──────────────
+// URL: https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png
+// Elevation (meters) = (R * 256 + G + B / 256) - 32768
 
-  // Generate procedural height map as fallback
-  private generateProceduralHeightMap(width: number, height: number): number[][] {
-    const heightMap: number[][] = [];
-    
-    for (let y = 0; y < height; y++) {
-      heightMap[y] = [];
-      for (let x = 0; x < width; x++) {
-        // Multi-octave noise for realistic terrain
-        let height = 0;
-        let frequency = 0.01;
-        let amplitude = 0.5;
-        
-        for (let i = 0; i < 4; i++) {
-          height += amplitude * this.noise(x * frequency, y * frequency);
-          frequency *= 2;
-          amplitude *= 0.5;
-        }
-        
-        heightMap[y][x] = Math.max(-0.2, Math.min(0.8, height));
+function latLngToTile(lat: number, lng: number, zoom: number): { x: number; y: number } {
+  const n = Math.pow(2, zoom);
+  const x = Math.floor(((lng + 180) / 360) * n);
+  const latRad = (lat * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
+  return { x, y };
+}
+
+// Pixel coords within a 256x256 tile (0–255)
+function latLngToTilePixel(lat: number, lng: number, zoom: number, tx: number, ty: number) {
+  const n = Math.pow(2, zoom);
+  const px = ((lng + 180) / 360) * n * 256 - tx * 256;
+  const latRad = (lat * Math.PI) / 180;
+  const py =
+    ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n * 256 -
+    ty * 256;
+  return { px: Math.floor(px), py: Math.floor(py) };
+}
+
+/**
+ * Fetch a terrarium terrain tile and decode its elevation data.
+ * Returns a 256x256 Float32Array of elevation in metres.
+ * Falls back to null if the fetch fails (network, CORS, etc.).
+ */
+async function fetchTerrainTile(z: number, x: number, y: number): Promise<Float32Array | null> {
+  try {
+    const url = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+    const res = await fetch(url, { cache: 'force-cache' });
+    if (!res.ok) return null;
+
+    const buf = Buffer.from(await res.arrayBuffer());
+
+    // Minimal PNG decoder – extract raw IDAT RGB pixels via Node built-ins.
+    // We use the `pngjs` package if available, otherwise fall back to null.
+    try {
+      // Dynamic import so it doesn't break if pngjs isn't installed
+      const { PNG } = await import('pngjs') as any;
+      return await new Promise<Float32Array>((resolve, reject) => {
+        const png = new PNG();
+        png.parse(buf, (err: Error, data: any) => {
+          if (err) return reject(err);
+          const pixels = data.data; // RGBA, 256*256*4 bytes
+          const elev = new Float32Array(256 * 256);
+          for (let i = 0; i < 256 * 256; i++) {
+            const r = pixels[i * 4];
+            const g = pixels[i * 4 + 1];
+            const b = pixels[i * 4 + 2];
+            elev[i] = r * 256 + g + b / 256 - 32768;
+          }
+          resolve(elev);
+        });
+      });
+    } catch {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build a gridSize×gridSize heightmap covering the bounding box around
+ * `coordinates` using real elevation tiles (zoom 11, ~78 m/px at equator).
+ * Falls back to procedural noise if tiles are unavailable.
+ */
+async function buildHeightMap(
+  coordinates: Coordinates,
+  gridSize = 64
+): Promise<number[][]> {
+  const zoom = 11;
+  const { x: tx, y: ty } = latLngToTile(coordinates.lat, coordinates.lng, zoom);
+
+  // 10 km bounding box in degrees
+  const kmLat = 1 / 110.54;
+  const kmLng = 1 / (111.32 * Math.cos((coordinates.lat * Math.PI) / 180));
+  const halfKm = 5;
+  const latMin = coordinates.lat - halfKm * kmLat;
+  const latMax = coordinates.lat + halfKm * kmLat;
+  const lngMin = coordinates.lng - halfKm * kmLng;
+  const lngMax = coordinates.lng + halfKm * kmLng;
+
+  // We only need the single tile that covers the centre point
+  const tile = await fetchTerrainTile(zoom, tx, ty);
+
+  const heightMap: number[][] = [];
+
+  if (tile) {
+    // Sample tile at gridSize×gridSize positions within the bbox
+    let elevMin = Infinity;
+    let elevMax = -Infinity;
+    const raw: number[][] = [];
+
+    for (let row = 0; row < gridSize; row++) {
+      raw[row] = [];
+      const lat = latMax - (row / (gridSize - 1)) * (latMax - latMin);
+      for (let col = 0; col < gridSize; col++) {
+        const lng = lngMin + (col / (gridSize - 1)) * (lngMax - lngMin);
+        const { px, py } = latLngToTilePixel(lat, lng, zoom, tx, ty);
+        const px2 = Math.max(0, Math.min(255, px));
+        const py2 = Math.max(0, Math.min(255, py));
+        const elev = tile[py2 * 256 + px2];
+        raw[row][col] = elev;
+        if (elev < elevMin) elevMin = elev;
+        if (elev > elevMax) elevMax = elev;
       }
     }
-    
-    return heightMap;
-  }
 
-  // Simple noise function for procedural generation
-  private noise(x: number, y: number): number {
-    const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
-    return (n - Math.floor(n)) * 2 - 1;
-  }
-
-  // Generate enhanced texture from satellite image
-  async generateEnhancedTexture(imageUrl: string, width: number = 1024, height: number = 1024): Promise<string> {
-    return new Promise((resolve) => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d')!;
-      const img = new Image();
-      
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        canvas.width = width;
-        canvas.height = height;
-        ctx.drawImage(img, 0, 0, width, height);
-        
-        // Apply enhancement filters
-        const imageData = ctx.getImageData(0, 0, width, height);
-        const data = imageData.data;
-        
-        // Enhance contrast and saturation
-        for (let i = 0; i < data.length; i += 4) {
-          // Increase contrast
-          data[i] = Math.min(255, (data[i] - 128) * 1.2 + 128);     // R
-          data[i + 1] = Math.min(255, (data[i + 1] - 128) * 1.2 + 128); // G
-          data[i + 2] = Math.min(255, (data[i + 2] - 128) * 1.2 + 128); // B
-          
-          // Enhance vegetation
-          if (data[i + 1] > data[i] && data[i + 1] > data[i + 2]) {
-            data[i + 1] = Math.min(255, data[i + 1] * 1.1);
-          }
+    // Normalise to [0, 1]
+    const range = elevMax - elevMin || 1;
+    for (let row = 0; row < gridSize; row++) {
+      heightMap[row] = [];
+      for (let col = 0; col < gridSize; col++) {
+        heightMap[row][col] = (raw[row][col] - elevMin) / range;
+      }
+    }
+  } else {
+    // Procedural fallback – multi-octave value noise, no DOM needed
+    for (let row = 0; row < gridSize; row++) {
+      heightMap[row] = [];
+      for (let col = 0; col < gridSize; col++) {
+        let h = 0;
+        let freq = 0.06;
+        let amp = 0.5;
+        for (let oct = 0; oct < 5; oct++) {
+          h += amp * valueNoise(col * freq + oct * 31.7, row * freq + oct * 17.3);
+          freq *= 2.1;
+          amp *= 0.5;
         }
-        
-        ctx.putImageData(imageData, 0, 0);
-        resolve(canvas.toDataURL('image/jpeg', 0.9));
-      };
-      
-      img.onerror = () => {
-        resolve(imageUrl); // Return original if enhancement fails
-      };
-      
-      img.src = imageUrl;
-    });
+        heightMap[row][col] = Math.max(0, Math.min(1, h * 0.5 + 0.5));
+      }
+    }
   }
 
-  // Generate complete 3D scene data
-  async generateScene3D(satelliteData: SatelliteImageData, coordinates: Coordinates): Promise<Scene3DData> {
-    const heightMap = await this.generateHeightMapFromImage(satelliteData.url);
-    const enhancedTexture = await this.generateEnhancedTexture(satelliteData.url);
-    
+  return heightMap;
+}
+
+/** Deterministic value noise (no DOM, no Math.random) */
+function valueNoise(x: number, y: number): number {
+  const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+  return (n - Math.floor(n)) * 2 - 1;
+}
+
+// ─── Public API ──────────────────────────────────────────────────────────────
+
+export class SceneGenerator {
+  async generateScene3D(
+    satelliteData: SatelliteImageData,
+    coordinates: Coordinates
+  ): Promise<Scene3DData> {
+    const heightMap = await buildHeightMap(coordinates, 64);
+
     return {
       heightMap,
-      textureUrl: enhancedTexture,
+      // Satellite image is already a usable texture URL – no canvas processing needed
+      textureUrl: satelliteData.url,
       dimensions: {
-        width: heightMap[0]?.length || 256,
-        height: heightMap.length || 256,
-      }
+        width: heightMap[0]?.length ?? 64,
+        height: heightMap.length ?? 64,
+      },
     };
   }
 
-  // Calculate optimal camera position for 3D scene
-  calculateCameraPosition(heightMap: number[][], width: number, height: number): [number, number, number] {
-    // Find average height and highest point
-    let totalHeight = 0;
-    let maxHeight = -Infinity;
-    let count = 0;
-    
-    for (let y = 0; y < heightMap.length; y++) {
-      for (let x = 0; x < heightMap[y].length; x++) {
-        totalHeight += heightMap[y][x];
-        maxHeight = Math.max(maxHeight, heightMap[y][x]);
-        count++;
-      }
-    }
-    
-    const avgHeight = totalHeight / count;
-    const cameraHeight = Math.max(avgHeight + 2, maxHeight + 1);
-    
-    return [0, cameraHeight, 5];
+  calculateCameraPosition(
+    heightMap: number[][],
+    _width: number,
+    _height: number
+  ): [number, number, number] {
+    let maxH = 0;
+    for (const row of heightMap) for (const v of row) if (v > maxH) maxH = v;
+    return [0, maxH * 3 + 2, 5];
   }
 }
