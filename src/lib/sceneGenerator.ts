@@ -29,6 +29,10 @@ function latLngToTilePixel(lat: number, lng: number, zoom: number, tx: number, t
  * Falls back to null if the fetch fails (network, CORS, etc.).
  */
 async function fetchTerrainTile(z: number, x: number, y: number): Promise<Float32Array | null> {
+  // Terrain tiles require Node.js Buffer + pngjs for PNG decoding; skip in the browser
+  // (CORS also blocks S3 terrain tiles from browsers). Procedural fallback handles this.
+  if (typeof window !== 'undefined') return null;
+
   try {
     const url = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
     const res = await fetch(url, { cache: 'force-cache' });

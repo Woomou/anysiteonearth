@@ -618,13 +618,25 @@ export default function Home() {
   const fetchSatellite = useCallback(async (c: Coordinates): Promise<SatelliteImageData | null> => {
     setLoadingSatellite(true);
     try {
-      const res = await fetch('/api/satellite', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ coordinates: c }),
+      const kmToDegreesLat = 1 / 110.54;
+      const kmToDegreesLng = 1 / (111.32 * Math.cos((c.lat * Math.PI) / 180));
+      const halfKm = 5;
+      const bounds = {
+        west: c.lng - halfKm * kmToDegreesLng,
+        south: c.lat - halfKm * kmToDegreesLat,
+        east: c.lng + halfKm * kmToDegreesLng,
+        north: c.lat + halfKm * kmToDegreesLat,
+      };
+      const params = new URLSearchParams({
+        bbox: `${bounds.west},${bounds.south},${bounds.east},${bounds.north}`,
+        size: '1024,1024',
+        bboxSR: '4326',
+        imageSR: '4326',
+        format: 'jpg',
+        f: 'image',
       });
-      if (!res.ok) throw new Error('Failed to fetch satellite image');
-      return await res.json();
+      const url = `https://server.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/export?${params}`;
+      return { url, date: new Date().toISOString(), cloudCoverage: 0, bounds };
     } catch {
       setError('Unable to fetch satellite image. Please try again.');
       return null;
@@ -656,13 +668,9 @@ export default function Home() {
 
     setLoadingScene(true);
     try {
-      const res = await fetch('/api/generate-scene', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ satelliteData: sat, coordinates: coords }),
-      });
-      if (!res.ok) throw new Error('Failed to generate 3D scene');
-      const data = await res.json();
+      const { SceneGenerator } = await import('@/lib/sceneGenerator');
+      const generator = new SceneGenerator();
+      const data = await generator.generateScene3D(sat, coords);
       setSceneData(data);
       setView('scene');
     } catch {
