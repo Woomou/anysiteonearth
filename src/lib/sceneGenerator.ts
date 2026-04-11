@@ -5,7 +5,7 @@ import { Coordinates, SatelliteImageData, Scene3DData, BuildingFeature } from '@
 const SCENE_UNITS = 10;      // Three.js scene side length
 const EXTENT_KM   = 1;       // Real-world coverage: 1 km × 1 km
 const M_PER_UNIT  = (EXTENT_KM * 1000) / SCENE_UNITS; // 100 m per Three.js unit
-const TERRAIN_H_SCALE = 3;   // heightmap [0,1] → Three.js units (matches Scene3DViewer)
+const TERRAIN_H_SCALE = 1.5; // heightmap [0,1] → Three.js units (matches Scene3DViewer)
 const DEFAULT_FLOOR_H = 3.5; // metres per floor when no height tag
 
 // ─── Coordinate helpers ───────────────────────────────────────────────────────
@@ -108,17 +108,36 @@ async function buildHeightMap(
       heightMap[row] = raw[row].map(v => (v - elevMin) / range);
     }
   } else {
-    // Deterministic procedural fallback
+    // Procedural fallback – smooth value noise with bilinear interpolation.
+    // The old code used uninterpolated sin-hash (white noise per cell) which
+    // created the "cactus field" artifact. This version samples between hashed
+    // integer corners with smoothstep curves for game-map-quality hills.
+    const hashF = (ix: number, iy: number) => {
+      const n = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453;
+      return n - Math.floor(n); // [0, 1]
+    };
+    const smoothNoise = (x: number, y: number) => {
+      const ix = Math.floor(x), iy = Math.floor(y);
+      const fx = x - ix,        fy = y - iy;
+      const ux = fx * fx * (3 - 2 * fx); // smoothstep
+      const uy = fy * fy * (3 - 2 * fy);
+      return (
+        hashF(ix,     iy    ) * (1 - ux) * (1 - uy) +
+        hashF(ix + 1, iy    ) *      ux  * (1 - uy) +
+        hashF(ix,     iy + 1) * (1 - ux) *      uy  +
+        hashF(ix + 1, iy + 1) *      ux  *      uy
+      );
+    };
+    // 3 octaves: large hills → medium detail → fine texture
+    const octaves = [[0.04, 0.60], [0.08, 0.30], [0.16, 0.10]] as const;
     for (let row = 0; row < gridSize; row++) {
       heightMap[row] = [];
       for (let col = 0; col < gridSize; col++) {
-        let h = 0, freq = 0.06, amp = 0.5;
-        for (let o = 0; o < 5; o++) {
-          const n = Math.sin(col * freq * 127.1 + row * freq * 311.7 + o * 31.7) * 43758.5453;
-          h += amp * ((n - Math.floor(n)) * 2 - 1);
-          freq *= 2.1; amp *= 0.5;
+        let h = 0;
+        for (const [freq, amp] of octaves) {
+          h += amp * smoothNoise(col * freq + 7.3, row * freq + 13.1);
         }
-        heightMap[row][col] = Math.max(0, Math.min(1, h * 0.5 + 0.5));
+        heightMap[row][col] = h; // sum of amps = 1.0, so already in [0, 1]
       }
     }
   }
@@ -216,23 +235,6 @@ async function fetchOSMBuildings(
   return buildings.slice(0, 600);
 }
 
-// ─── Terrain height sampler (for building base) ───────────────────────────────
-
-function sampleTerrainHeight(
-  heightMap: number[][],
-  sceneX: number,
-  sceneZ: number,
-): number {
-  const rows = heightMap.length;
-  const cols = heightMap[0]?.length ?? 0;
-  if (!rows || !cols) return 0;
-  const u = (sceneX + SCENE_UNITS / 2) / SCENE_UNITS;
-  const v = (-sceneZ + SCENE_UNITS / 2) / SCENE_UNITS;
-  const col = Math.max(0, Math.min(cols - 1, Math.floor(u * cols)));
-  const row = Math.max(0, Math.min(rows - 1, Math.floor(v * rows)));
-  return heightMap[row][col] * TERRAIN_H_SCALE;
-}
-
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export class SceneGenerator {
@@ -241,7 +243,7 @@ export class SceneGenerator {
     coordinates: Coordinates,
   ): Promise<Scene3DData> {
     const extentKm = EXTENT_KM;
-    const gridSize = 64;
+    const gridSize = 128;
 
     // Run DEM + OSM in parallel
     const [heightMap, buildings] = await Promise.all([

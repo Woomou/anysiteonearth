@@ -8,7 +8,7 @@ import { Scene3DData, Coordinates, BuildingFeature } from '@/types';
 
 // ─── Constants (must match sceneGenerator.ts) ─────────────────────────────────
 const SCENE_UNITS   = 10;
-const TERRAIN_H_SCALE = 3;
+const TERRAIN_H_SCALE = 1.5; // matches sceneGenerator.ts
 
 // ─── Terrain height sampler (mirrors sceneGenerator logic) ────────────────────
 
@@ -141,13 +141,13 @@ function TerrainMesh({ sceneData }: { sceneData: Scene3DData }) {
   }, [sceneData]);
 
   return (
-    <mesh geometry={geometry} rotation={[-Math.PI / 2, 0, 0]}>
-      <meshLambertMaterial
-        map={texture}
-        side={THREE.DoubleSide}
-        transparent={!texture}
-        opacity={texture ? 1 : 0.7}
-        color={texture ? 0xffffff : 0x567d46}
+    <mesh geometry={geometry} rotation={[-Math.PI / 2, 0, 0]} receiveShadow castShadow>
+      <meshStandardMaterial
+        map={texture ?? undefined}
+        color={texture ? 0xffffff : 0x7aab5a}
+        roughness={0.88}
+        metalness={0.0}
+        side={THREE.FrontSide}
       />
     </mesh>
   );
@@ -192,17 +192,25 @@ function Scene3D({ sceneData, onCameraMove }: Scene3DViewerProps) {
         />
       )}
 
-      <ambientLight intensity={0.5} />
+      {/* Outdoor PBR lighting rig */}
+      <hemisphereLight args={['#c9e8ff', '#4a7c3f', 0.9]} />
       <directionalLight
-        position={[8, 12, 6]}
-        intensity={1.2}
+        position={[12, 20, 8]}
+        intensity={2.0}
+        color="#fff8e8"
         castShadow
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
+        shadow-camera-left={-8}
+        shadow-camera-right={8}
+        shadow-camera-top={8}
+        shadow-camera-bottom={-8}
+        shadow-bias={-0.0005}
       />
-      <directionalLight position={[-6, 8, -4]} intensity={0.3} />
+      {/* Soft sky fill from opposite side */}
+      <directionalLight position={[-6, 10, -5]} intensity={0.35} color="#aad4ff" />
 
-      <fog attach="fog" args={['#87CEEB', 15, 55]} />
+      <fog attach="fog" args={['#c9dff5', 20, 60]} />
     </>
   );
 }
@@ -214,7 +222,7 @@ function CameraController({ sceneData }: { sceneData: Scene3DData | null }) {
     if (cameraRef.current && sceneData?.heightMap?.length) {
       const flat = sceneData.heightMap.flat();
       const avg = flat.reduce((a, b) => a + b, 0) / flat.length;
-      cameraRef.current.position.set(0, Math.max(3, avg * TERRAIN_H_SCALE + 4), 9);
+      cameraRef.current.position.set(0, Math.max(5, avg * TERRAIN_H_SCALE + 6), 10);
       cameraRef.current.lookAt(0, 0, 0);
     }
   }, [sceneData]);
@@ -223,10 +231,10 @@ function CameraController({ sceneData }: { sceneData: Scene3DData | null }) {
     <PerspectiveCamera
       ref={cameraRef}
       makeDefault
-      fov={65}
+      fov={55}
       near={0.1}
-      far={120}
-      position={[0, 6, 9]}
+      far={150}
+      position={[0, 10, 10]}
     />
   );
 }
@@ -256,8 +264,7 @@ function Attribution() {
 
 export default function Scene3DViewer({ sceneData, coordinates, onCameraMove }: Scene3DViewerProps) {
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%' }}
-         className="bg-gradient-to-b from-sky-900 to-sky-700">
+    <div style={{ position: 'relative', width: '100%', height: '100%', background: 'linear-gradient(to bottom, #7ab4d8 0%, #b8d8ee 100%)' }}>
       <Canvas shadows>
         <CameraController sceneData={sceneData} />
         <Scene3D sceneData={sceneData} coordinates={coordinates} onCameraMove={onCameraMove} />
