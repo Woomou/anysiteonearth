@@ -4,10 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && rm -rf dist && cp -R out dist",
     "start": "next start",
     "lint": "next lint",
-    "deploy": "./deploy.sh"
+    "deploy": "./deploy.sh",
+    "dist:clean": "rm -rf dist out"
   },
   "dependencies": {
     "@react-three/drei": "^9.111.3",
@@ -23,7 +24,8 @@
     "react": "^18",
     "react-dom": "^18",
     "react-leaflet": "^4.2.1",
-    "three": "^0.167.0"
+    "three": "^0.167.0",
+    "wrangler": "^4.99.0"
   },
   "devDependencies": {
     "@types/node": "^20",
